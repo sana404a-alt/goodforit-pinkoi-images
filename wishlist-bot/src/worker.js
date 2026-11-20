@@ -5,7 +5,7 @@
 //   POST /webhook   Instagram 私訊事件
 //   POST /add       備用：直接送 {"url": "..."}（例如 iPhone 捷徑），需 Bearer ADD_TOKEN
 
-import { extractUrls, fetchProduct } from "./product.js";
+import { extractUrls, fetchProduct, siteName } from "./product.js";
 import { addProduct } from "./notion.js";
 
 const enc = new TextEncoder();
@@ -74,32 +74,46 @@ export async function saveLinks(env, urls) {
   return results;
 }
 
-function summary(results) {
-  return results
-    .map((r) => {
-      const name = r.title || r.url;
-      if (r.status === "added") return `🛍️ 已加入「想買的東西」：${name}${r.price ? `（$${r.price}）` : ""}`;
-      if (r.status === "duplicate") return `👌 這個已經在清單裡了：${name}`;
-      return `⚠️ 加入失敗：${r.url}`;
-    })
-    .join("\n");
+// 機器人回覆的開頭。自我傳訊時，機器人的回覆也會送回 webhook，用這個記號略過，避免無限循環。
+export const BOT_PREFIX = "🤖";
+
+// 回覆裡刻意不放網址（同樣是為了避免自我傳訊時又被當成新連結）
+export function summary(results) {
+  const lines = results.map((r) => {
+    const name = (r.title || siteName(r.url)).replace(/https?:\/\/\S+/g, "").trim() || "商品";
+    if (r.status === "added") return `🛍️ 已加入「想買的東西」：${name}${r.price ? `（$${r.price}）` : ""}`;
+    if (r.status === "duplicate") return `👌 這個已經在清單裡了：${name}`;
+    return `⚠️ 加入失敗：${name}`;
+  });
+  return `${BOT_PREFIX} ${lines.join("\n")}`;
 }
 
-async function handleEvent(env, event) {
+export async function handleEvent(env, event, deps = { saveLinks, reply }) {
   const senderId = event.sender?.id;
   const message = event.message;
-  if (!senderId || !message || message.is_echo || message.is_deleted) return;
+  if (!senderId || !message || message.is_deleted) return;
+  if (message.text?.startsWith(BOT_PREFIX)) return; // 機器人自己的回覆
 
-  if (!allowed(env, senderId)) {
+  let replyTo;
+  if (message.is_self) {
+    // 自我傳訊：連結到 App 的帳號傳訊息給自己。webhook 已驗證簽章，只有本人做得到，不用白名單。
+    replyTo = event.recipient?.id;
+  } else if (message.is_echo) {
+    return; // 帳號傳給別人的訊息，不處理
+  } else if (allowed(env, senderId)) {
+    replyTo = senderId;
+  } else {
     // 還沒設定白名單時，告訴對方自己的 id，方便填進 ALLOWED_SENDER_IDS
     console.log("message from non-allowed sender", senderId);
-    if (!env.ALLOWED_SENDER_IDS) await reply(env, senderId, `你的 sender id 是：${senderId}\n請把它設定到 ALLOWED_SENDER_IDS`);
+    if (!env.ALLOWED_SENDER_IDS)
+      await deps.reply(env, senderId, `${BOT_PREFIX} 你的 sender id 是：${senderId}\n請把它設定到 ALLOWED_SENDER_IDS`);
     return;
   }
 
   const urls = linksFromMessage(message);
   if (urls.length === 0) return;
-  await reply(env, senderId, summary(await saveLinks(env, urls)));
+  const results = await deps.saveLinks(env, urls);
+  if (replyTo) await deps.reply(env, replyTo, summary(results));
 }
 
 async function handleWebhookPost(request, env, ctx) {

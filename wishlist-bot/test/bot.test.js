@@ -103,3 +103,50 @@ test("webhook verification and signature", async () => {
   const rej = await worker.fetch(new Request("https://w/webhook", { method: "POST", body }), env, { waitUntil() {} });
   assert.equal(rej.status, 401);
 });
+
+import { handleEvent, summary } from "../src/worker.js";
+
+function spyDeps() {
+  const calls = { saved: [], replies: [] };
+  return {
+    calls,
+    deps: {
+      saveLinks: async (env, urls) => { calls.saved.push(...urls); return urls.map((url) => ({ url, status: "added", title: "杯子" })); },
+      reply: async (env, to, text) => { calls.replies.push({ to, text }); },
+    },
+  };
+}
+
+test("self message (is_echo + is_self) is saved and replied to", async () => {
+  const { calls, deps } = spyDeps();
+  await handleEvent({}, {
+    sender: { id: "ME" }, recipient: { id: "SCOPED" },
+    message: { text: "https://www.pinkoi.com/product/1", is_echo: true, is_self: true },
+  }, deps);
+  assert.deepEqual(calls.saved, ["https://www.pinkoi.com/product/1"]);
+  assert.equal(calls.replies[0].to, "SCOPED");
+});
+
+test("bot's own reply is ignored (no loop)", async () => {
+  const { calls, deps } = spyDeps();
+  await handleEvent({}, {
+    sender: { id: "ME" }, recipient: { id: "SCOPED" },
+    message: { text: summary([{ url: "https://a.com/x", status: "added", title: "" }]), is_echo: true, is_self: true },
+  }, deps);
+  assert.equal(calls.saved.length, 0);
+});
+
+test("replies never contain URLs", () => {
+  const s = summary([{ url: "https://a.com/x", status: "added", title: "" }, { url: "https://b.com", status: "error" }]);
+  assert.ok(!/https?:\/\//.test(s));
+  assert.ok(s.startsWith("🤖"));
+});
+
+test("normal echo to someone else is ignored; strangers are not saved", async () => {
+  const { calls, deps } = spyDeps();
+  await handleEvent({ ALLOWED_SENDER_IDS: "FRIEND" }, { sender: { id: "ME" }, message: { text: "https://a.com", is_echo: true } }, deps);
+  await handleEvent({ ALLOWED_SENDER_IDS: "FRIEND" }, { sender: { id: "STRANGER" }, message: { text: "https://a.com" } }, deps);
+  assert.equal(calls.saved.length, 0);
+  await handleEvent({ ALLOWED_SENDER_IDS: "FRIEND" }, { sender: { id: "FRIEND" }, message: { text: "https://a.com" } }, deps);
+  assert.deepEqual(calls.saved, ["https://a.com"]);
+});
