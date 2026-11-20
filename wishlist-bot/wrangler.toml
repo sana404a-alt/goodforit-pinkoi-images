@@ -1,0 +1,15 @@
+name = "wishlist-bot"
+main = "src/worker.js"
+compatibility_date = "2026-01-01"
+
+[vars]
+# Notion「🛍️ 想買的東西」資料庫
+NOTION_DATABASE_ID = "fb114b862f19483db32f22e7849a7c38"
+# 第一次部署先留空；傳一則訊息給機器人帳號，它會回覆你的 sender id，再填進來
+ALLOWED_SENDER_IDS = ""
+
+# 以下用 `npx wrangler secret put <NAME>` 設定，不要寫在這裡：
+#   NOTION_TOKEN        Notion integration 的 secret
+#   IG_VERIFY_TOKEN     自己取的一串字，Meta webhook 設定時要填一樣的
+#   IG_APP_SECRET       Meta App 的 App Secret（驗證 webhook 簽章）
+#   IG_ACCESS_TOKEN     Instagram 帳號的 access token（用來回覆「已加入」）
